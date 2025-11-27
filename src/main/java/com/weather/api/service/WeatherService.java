@@ -1,7 +1,9 @@
 package com.weather.api.service;
 
+import com.weather.api.exception.WeatherServiceException;
 import com.weather.api.model.WeatherResponse;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Map;
@@ -18,8 +20,8 @@ public class WeatherService {
 
     private final RestTemplate restTemplate;
 
-    public WeatherService() {
-        this.restTemplate = new RestTemplate();
+    public WeatherService(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
     }
 
     /**
@@ -28,23 +30,45 @@ public class WeatherService {
      * @param latitude  the latitude coordinate
      * @param longitude the longitude coordinate
      * @return WeatherResponse containing current weather data
+     * @throws WeatherServiceException if weather data cannot be fetched
      */
-    @SuppressWarnings("unchecked")
     public WeatherResponse getWeather(double latitude, double longitude) {
         String url = String.format(OPEN_METEO_API_URL, latitude, longitude);
         
-        Map<String, Object> response = restTemplate.getForObject(url, Map.class);
+        Map<String, Object> response;
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> rawResponse = restTemplate.getForObject(url, Map.class);
+            response = rawResponse;
+        } catch (RestClientException e) {
+            throw new WeatherServiceException(
+                "Failed to fetch weather data from Open-Meteo API for coordinates: " + latitude + ", " + longitude, e);
+        }
         
         if (response == null) {
-            throw new RuntimeException("Failed to fetch weather data");
+            throw new WeatherServiceException(
+                "Empty response from Open-Meteo API for coordinates: " + latitude + ", " + longitude);
         }
 
+        @SuppressWarnings("unchecked")
         Map<String, Object> currentWeather = (Map<String, Object>) response.get("current_weather");
-        Map<String, Object> currentWeatherUnits = (Map<String, Object>) response.get("current_weather_units");
         
-        double temp = ((Number) currentWeather.get("temperature")).doubleValue();
-        double windSpeed = ((Number) currentWeather.get("windspeed")).doubleValue();
-        int weatherCode = ((Number) currentWeather.get("weathercode")).intValue();
+        if (currentWeather == null) {
+            throw new WeatherServiceException(
+                "Missing current_weather data in API response for coordinates: " + latitude + ", " + longitude);
+        }
+        
+        Number temperature = (Number) currentWeather.get("temperature");
+        Number windSpeed = (Number) currentWeather.get("windspeed");
+        Number weatherCode = (Number) currentWeather.get("weathercode");
+        
+        if (temperature == null || windSpeed == null || weatherCode == null) {
+            throw new WeatherServiceException(
+                "Missing required weather fields in API response for coordinates: " + latitude + ", " + longitude);
+        }
+        
+        @SuppressWarnings("unchecked")
+        Map<String, Object> currentWeatherUnits = (Map<String, Object>) response.get("current_weather_units");
         
         String tempUnit = currentWeatherUnits != null ? 
             (String) currentWeatherUnits.get("temperature") : "°C";
@@ -54,11 +78,11 @@ public class WeatherService {
         return new WeatherResponse(
             latitude,
             longitude,
-            temp,
-            windSpeed,
+            temperature.doubleValue(),
+            windSpeed.doubleValue(),
             tempUnit,
             windUnit,
-            getWeatherDescription(weatherCode)
+            getWeatherDescription(weatherCode.intValue())
         );
     }
 
